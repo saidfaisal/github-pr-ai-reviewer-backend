@@ -3,6 +3,12 @@ import { createServer } from "node:http";
 const HOST = "127.0.0.1";
 const PORT = 3000;
 
+const supportedActions = [
+        "opened",
+        "reopened",
+        "synchronize"
+    ];
+
 const server = createServer(async (request, response) => {
     console.log(
         `${request.method} ${request.url}`
@@ -33,6 +39,28 @@ const server = createServer(async (request, response) => {
         request.method === "POST" &&
         request.url === "/webhooks/github"
     ) {
+        const githubEvent = request.headers["x-github-event"];
+
+        const githubDelivery = request.headers["x-github-delivery"];
+
+        console.log("Github Event:", githubEvent);
+        console.log("Github Delivery", githubDelivery)
+
+        if (githubEvent !== "pull_request") {
+            response.writeHead(200, {
+                "Content-Type": "application/json",
+            });
+
+            response.end(
+                JSON.stringify({
+                    status: "ignored",
+                    reason: "Unsupported GitHub event",
+                })
+            );
+
+            return;
+        }
+
         const chunks: Buffer[] = [];
 
         for await (const chunk of request) {
@@ -45,9 +73,6 @@ const server = createServer(async (request, response) => {
 
         const bodyText = rawBody.toString("utf8")
 
-        console.log("Raw body:");
-        console.log(bodyText)
-
         try {
             const payload = JSON.parse(bodyText);
 
@@ -58,11 +83,20 @@ const server = createServer(async (request, response) => {
                 "Content-Type": "application/json"
             })
 
-            response.end(
-                JSON.stringify({
-                    status: "received"
-                })
-            )
+            if (!supportedActions.includes(payload.action)) {
+                response.end(
+                    JSON.stringify({
+                        status: "ignored",
+                        reason: "Unsupported GitHub event"
+                    })
+                )
+            } else {
+                response.end(
+                    JSON.stringify({
+                        status: "received"
+                    })
+                )
+            }
         } catch {
             response.writeHead(400, {
                 "Content-Type": "application/json"
