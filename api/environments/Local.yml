@@ -1,0 +1,5 @@
+name: Local
+variables:
+  - name: webhookSecret
+    value: ac6e45c9633be7fa2f472f1a264e271843d34c14123e1c6934280b840fa3ebe2
+    description: ""

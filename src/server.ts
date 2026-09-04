@@ -1,130 +1,280 @@
+import {
+    createHmac,
+    timingSafeEqual,
+} from "node:crypto";
+
 import { createServer } from "node:http";
 
 const HOST = "127.0.0.1";
 const PORT = 3000;
 
-const supportedActions = [
-        "opened",
-        "reopened",
-        "synchronize"
-    ];
+const SUPPORTED_ACTIONS = new Set([
+    "opened",
+    "reopened",
+    "synchronize",
+]);
 
-const server = createServer(async (request, response) => {
-    console.log(
-        `${request.method} ${request.url}`
-    );
+const getRequiredEnv = (
+    name: string
+): string => {
+    const value = process.env[name];
 
-    if(
-        request.method === "GET" && 
-        request.url === "/health"
-    ) {
-        response.writeHead(200, {
-            "Content-Type": "application/json"
-        });
-
-        response.end(
-            JSON.stringify({
-                status: "ok"
-            })
+    if (!value) {
+        throw new Error(
+            `${name} is not configured`
         );
-
-        return;
     }
 
-    // -------------------------------------
-    // POST /webhooks/github
-    // -------------------------------------
+    return value;
+};
 
-    if(
-        request.method === "POST" &&
-        request.url === "/webhooks/github"
+const WEBHOOK_SECRET = getRequiredEnv(
+    "GITHUB_WEBHOOK_SECRET"
+);
+
+const verifyGitHubSignature = (
+    rawBody: Buffer,
+    signature: string
+): boolean => {
+    if (
+        !/^sha256=[a-f0-9]{64}$/.test(
+            signature
+        )
     ) {
-        const githubEvent = request.headers["x-github-event"];
+        return false;
+    }
 
-        const githubDelivery = request.headers["x-github-delivery"];
+    const expectedSignature =
+        "sha256=" +
+        createHmac(
+            "sha256",
+            WEBHOOK_SECRET
+        )
+            .update(rawBody)
+            .digest("hex");
 
-        console.log("Github Event:", githubEvent);
-        console.log("Github Delivery", githubDelivery)
+    const expectedBuffer =
+        Buffer.from(expectedSignature);
 
-        if (githubEvent !== "pull_request") {
+    const receivedBuffer =
+        Buffer.from(signature);
+
+    return timingSafeEqual(
+        expectedBuffer,
+        receivedBuffer
+    );
+};
+
+const server = createServer(
+    async (request, response) => {
+        console.log(
+            `${request.method} ${request.url}`
+        );
+
+        // -------------------------------------
+        // GET /health
+        // -------------------------------------
+
+        if (
+            request.method === "GET" &&
+            request.url === "/health"
+        ) {
             response.writeHead(200, {
                 "Content-Type": "application/json",
             });
 
             response.end(
                 JSON.stringify({
-                    status: "ignored",
-                    reason: "Unsupported GitHub event",
+                    status: "ok",
                 })
             );
 
             return;
         }
 
-        const chunks: Buffer[] = [];
+        // -------------------------------------
+        // POST /webhooks/github
+        // -------------------------------------
 
-        for await (const chunk of request) {
-            chunks.push(
-                Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        if (
+            request.method === "POST" &&
+            request.url === "/webhooks/github"
+        ) {
+            const githubEvent =
+                request.headers["x-github-event"];
+
+            const githubDelivery =
+                request.headers["x-github-delivery"];
+
+            const githubSignature =
+                request.headers["x-hub-signature-256"];
+
+            if (
+                typeof githubEvent !== "string" ||
+                typeof githubDelivery !== "string" ||
+                typeof githubSignature !== "string"
+            ) {
+                response.writeHead(400, {
+                    "Content-Type": "application/json",
+                });
+
+                response.end(
+                    JSON.stringify({
+                        error:
+                            "Missing required GitHub headers",
+                    })
+                );
+
+                return;
+            }
+
+            const chunks: Buffer[] = [];
+
+            for await (const chunk of request) {
+                chunks.push(
+                    Buffer.isBuffer(chunk)
+                        ? chunk
+                        : Buffer.from(chunk)
+                );
+            }
+
+            const rawBody =
+                Buffer.concat(chunks);
+
+            // -------------------------------------
+            // Authenticate first
+            // -------------------------------------
+
+            if (
+                !verifyGitHubSignature(
+                    rawBody,
+                    githubSignature
+                )
+            ) {
+                response.writeHead(401, {
+                    "Content-Type": "application/json",
+                });
+
+                response.end(
+                    JSON.stringify({
+                        error:
+                            "Invalid webhook signature",
+                    })
+                );
+
+                return;
+            }
+
+            console.log(
+                "GitHub Event:",
+                githubEvent
             );
-        }
 
-        const rawBody = Buffer.concat(chunks)
+            console.log(
+                "GitHub Delivery:",
+                githubDelivery
+            );
 
-        const bodyText = rawBody.toString("utf8")
+            // -------------------------------------
+            // Event filtering
+            // -------------------------------------
 
-        try {
-            const payload = JSON.parse(bodyText);
+            if (
+                githubEvent !== "pull_request"
+            ) {
+                response.writeHead(200, {
+                    "Content-Type": "application/json",
+                });
 
-            console.log("Parsed payload:");
-            console.log(payload)
-
-            response.writeHead(200, {
-                "Content-Type": "application/json"
-            })
-
-            if (!supportedActions.includes(payload.action)) {
                 response.end(
                     JSON.stringify({
                         status: "ignored",
-                        reason: "Unsupported GitHub event"
+                        reason:
+                            "Unsupported GitHub event",
                     })
-                )
-            } else {
+                );
+
+                return;
+            }
+
+            const bodyText =
+                rawBody.toString("utf8");
+
+            try {
+                const payload =
+                    JSON.parse(bodyText);
+
+                console.log(
+                    "Parsed payload:"
+                );
+
+                console.log(payload);
+
+                if (
+                    !SUPPORTED_ACTIONS.has(
+                        payload.action
+                    )
+                ) {
+                    response.writeHead(200, {
+                        "Content-Type":
+                            "application/json",
+                    });
+
+                    response.end(
+                        JSON.stringify({
+                            status: "ignored",
+                            reason:
+                                "Unsupported pull request action",
+                        })
+                    );
+
+                    return;
+                }
+
+                response.writeHead(200, {
+                    "Content-Type":
+                        "application/json",
+                });
+
                 response.end(
                     JSON.stringify({
-                        status: "received"
+                        status: "received",
                     })
-                )
-            }
-        } catch {
-            response.writeHead(400, {
-                "Content-Type": "application/json"
-            })
+                );
+            } catch {
+                response.writeHead(400, {
+                    "Content-Type":
+                        "application/json",
+                });
 
-            response.end(
-                JSON.stringify({
-                    error: "Invalid JSON"
-                })
-            )
+                response.end(
+                    JSON.stringify({
+                        error: "Invalid JSON",
+                    })
+                );
+            }
+
+            return;
         }
 
-        return;
+        // -------------------------------------
+        // 404
+        // -------------------------------------
+
+        response.writeHead(404, {
+            "Content-Type": "application/json",
+        });
+
+        response.end(
+            JSON.stringify({
+                error: "Not found",
+            })
+        );
     }
-
-    response.writeHead(404, {
-        "Content-Type": "application/json"
-    })
-
-    response.end(
-        JSON.stringify({
-            error: "Not found"
-        })
-    )
-})
+);
 
 server.listen(PORT, HOST, () => {
     console.log(
         `Server running at http://${HOST}:${PORT}`
-    )
-})
+    );
+});
