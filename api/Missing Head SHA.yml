@@ -1,7 +1,7 @@
 info:
-  name: PR Opened Webhook
+  name: Missing Head SHA
   type: http
-  seq: 2
+  seq: 14
 
 http:
   method: POST
@@ -12,7 +12,7 @@ http:
     - name: X-Github-Event
       value: pull_request
     - name: X-Github-Delivery
-      value: local-test-001
+      value: local-test-012
   body:
     type: json
     data: |-
@@ -21,11 +21,6 @@ http:
         "number": 42,
         "repository": {
           "full_name": "example/android-app"
-        },
-        "pull_request": {
-          "head": {
-            "sha": "abc123def456"
-          }
         },
         "sender": {
           "login": "developer"

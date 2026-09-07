@@ -1,0 +1,71 @@
+info:
+  name: Unsupported GitHub Event
+  type: http
+  seq: 8
+
+http:
+  method: POST
+  url: http://127.0.0.1:3000/webhooks/github
+  headers:
+    - name: Content-Type
+      value: application/json
+    - name: X-Github-Event
+      value: push
+    - name: X-Github-Delivery
+      value: local-test-001
+  body:
+    type: json
+    data: |-
+      {
+        "action": "opened",
+        "number": 42,
+        "repository": {
+          "full_name": "example/android-app"
+        },
+        "pull_request": {
+          "head": {
+            "sha": "abc123def456"
+          }
+        },
+        "sender": {
+          "login": "developer"
+        }
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        const CryptoJS =
+            require("crypto-js");
+
+        const secret =
+            bru.getEnvVar("webhookSecret");
+
+        const rawBody =
+            req.getBody({
+                raw: true,
+            });
+
+        const signature =
+            CryptoJS
+                .HmacSHA256(
+                    rawBody,
+                    secret
+                )
+                .toString(
+                    CryptoJS.enc.Hex
+                );
+
+        req.setHeader(
+            "X-Hub-Signature-256",
+            `sha256=${signature}`
+        );
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
