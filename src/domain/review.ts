@@ -12,6 +12,20 @@ export type ReviewTrigger = {
     sender: string | null;
 };
 
+export type ReviewStatus = 
+    | "queued"
+    | "processing"
+    | "completed"
+    | "failed";
+
+export type ReviewJob = {
+    trigger: ReviewTrigger;
+    status: ReviewStatus;
+    error: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
 export const SUPPORTED_ACTIONS =
     new Set<SupportedAction>([
         "opened",

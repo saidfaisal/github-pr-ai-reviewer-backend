@@ -17,6 +17,22 @@ import {
 } from "./adapters/outbound/inMemoryReviewQueue.ts";
 
 import {
+    InMemoryReviewJobStore,
+} from "./adapters/outbound/inMemoryReviewJobStore.ts";
+
+import {
+    FakeReviewProcessor,
+} from "./adapters/outbound/fakeReviewProcessor.ts";
+
+import {
+    createGetReviewJob,
+} from "./application/useCases/getReviewJob.ts";
+
+import {
+    createReviewStatusHandler,
+} from "./adapters/inbound/reviewStatus.ts";
+
+import {
     GITHUB_WEBHOOK_SECRET,
     HOST,
     MAX_BODY_BYTES,
@@ -31,14 +47,23 @@ import {
 // Dependency wiring
 // -------------------------------------
 
-const reviewQueue =
-    new InMemoryReviewQueue();
+const reviewJobStore =
+    new InMemoryReviewJobStore();
 
-const enqueuePullRequestReview =
-    createEnqueuePullRequestReview(
-        reviewQueue
+const reviewProcessor =
+    new FakeReviewProcessor();
+
+const reviewQueue =
+    new InMemoryReviewQueue(
+        reviewProcessor,
+        reviewJobStore
     );
 
+const enqueuePullRequestReview =
+    createEnqueuePullRequestReview({
+        reviewQueue,
+        reviewJobStore,
+    });
 const handleGitHubWebhook =
     createGitHubWebhookHandler({
         webhookSecret:
@@ -49,6 +74,17 @@ const handleGitHubWebhook =
 
         enqueuePullRequestReview,
     });
+
+const getReviewJob =
+    createGetReviewJob(
+        reviewJobStore
+    );
+
+const handleReviewStatus =
+    createReviewStatusHandler({
+        getReviewJob,
+    });
+
 
 // -------------------------------------
 // Routing
@@ -62,9 +98,19 @@ const handleRequest = async (
         `${request.method} ${request.url}`
     );
 
+    const url =
+        new URL(
+            request.url ?? "/",
+            `http://${HOST}`
+        );
+
+    // -------------------------------------
+    // Health
+    // -------------------------------------
+
     if (
         request.method === "GET" &&
-        request.url === "/health"
+        url.pathname === "/health"
     ) {
         sendJson(
             response,
@@ -77,9 +123,13 @@ const handleRequest = async (
         return;
     }
 
+    // -------------------------------------
+    // GitHub webhook
+    // -------------------------------------
+
     if (
         request.method === "POST" &&
-        request.url ===
+        url.pathname ===
             "/webhooks/github"
     ) {
         await handleGitHubWebhook(
@@ -89,6 +139,36 @@ const handleRequest = async (
 
         return;
     }
+
+    // -------------------------------------
+    // Review status
+    // -------------------------------------
+
+    const reviewStatusMatch =
+        url.pathname.match(
+            /^\/reviews\/([^/]+)$/
+        );
+
+    if (
+        request.method === "GET" &&
+        reviewStatusMatch
+    ) {
+        const deliveryId =
+            decodeURIComponent(
+                reviewStatusMatch[1]
+            );
+
+        await handleReviewStatus(
+            deliveryId,
+            response
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Not found
+    // -------------------------------------
 
     sendJson(
         response,

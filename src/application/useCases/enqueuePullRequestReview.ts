@@ -1,6 +1,11 @@
 import type {
+    ReviewJob,
     ReviewTrigger,
 } from "../../domain/review.ts";
+
+import type {
+    ReviewJobStore,
+} from "../ports/reviewJobStore.ts";
 
 import type {
     ReviewQueue,
@@ -8,15 +13,49 @@ import type {
 
 export type EnqueuePullRequestReview = (
     reviewTrigger: ReviewTrigger
-) => void;
+) => Promise<void>;
+
+type Dependencies = {
+    reviewQueue: ReviewQueue;
+    reviewJobStore: ReviewJobStore;
+};
 
 export const createEnqueuePullRequestReview = (
-    reviewQueue: ReviewQueue
+    dependencies: Dependencies
 ): EnqueuePullRequestReview => {
-    return (
+    const {
+        reviewQueue,
+        reviewJobStore,
+    } = dependencies;
+
+    return async (
         reviewTrigger: ReviewTrigger
-    ): void => {
-        reviewQueue.enqueue(
+    ): Promise<void> => {
+        const now =
+            new Date().toISOString();
+
+        const job: ReviewJob = {
+            trigger:
+                reviewTrigger,
+
+            status:
+                "queued",
+
+            error:
+                null,
+
+            createdAt:
+                now,
+
+            updatedAt:
+                now,
+        };
+
+        await reviewJobStore.save(
+            job
+        );
+
+        await reviewQueue.enqueue(
             reviewTrigger
         );
     };

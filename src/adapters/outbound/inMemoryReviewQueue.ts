@@ -3,21 +3,16 @@ import type {
 } from "../../domain/review.ts";
 
 import type {
+    ReviewJobStore,
+} from "../../application/ports/reviewJobStore.ts";
+
+import type {
+    ReviewProcessor,
+} from "../../application/ports/reviewProcessor.ts";
+
+import type {
     ReviewQueue,
 } from "../../application/ports/reviewQueue.ts";
-
-const sleep = (
-    milliseconds: number
-): Promise<void> => {
-    return new Promise(
-        (resolve) => {
-            setTimeout(
-                resolve,
-                milliseconds
-            );
-        }
-    );
-};
 
 export class InMemoryReviewQueue
     implements ReviewQueue {
@@ -28,9 +23,26 @@ export class InMemoryReviewQueue
     private workerRunning =
         false;
 
-    enqueue(
+    private readonly reviewProcessor:
+        ReviewProcessor;
+
+    private readonly reviewJobStore:
+        ReviewJobStore;
+
+    constructor(
+        reviewProcessor: ReviewProcessor,
+        reviewJobStore: ReviewJobStore
+    ) {
+        this.reviewProcessor =
+            reviewProcessor;
+
+        this.reviewJobStore =
+            reviewJobStore;
+    }
+
+    async enqueue(
         reviewTrigger: ReviewTrigger
-    ): void {
+    ): Promise<void> {
         this.queue.push(
             reviewTrigger
         );
@@ -62,30 +74,18 @@ export class InMemoryReviewQueue
 
             try {
                 while (
-                    this.queue.length >
-                    0
+                    this.queue.length > 0
                 ) {
                     const reviewTrigger =
                         this.queue.shift();
 
-                    if (
-                        !reviewTrigger
-                    ) {
+                    if (!reviewTrigger) {
                         continue;
                     }
 
-                    try {
-                        await this.processReviewJob(
-                            reviewTrigger
-                        );
-                    } catch (
-                        error: unknown
-                    ) {
-                        console.error(
-                            "[Worker] Review failed:",
-                            error
-                        );
-                    }
+                    await this.processJob(
+                        reviewTrigger
+                    );
                 }
             } finally {
                 this.workerRunning =
@@ -93,46 +93,65 @@ export class InMemoryReviewQueue
             }
         };
 
-    private processReviewJob =
-        async (
-            reviewTrigger:
-                ReviewTrigger
-        ): Promise<void> => {
+    private processJob = async (
+        reviewTrigger: ReviewTrigger
+    ): Promise<void> => {
+        try {
+            await this.reviewJobStore
+                .updateStatus(
+                    reviewTrigger.deliveryId,
+                    "processing"
+                );
+
             console.log(
-                "[Worker] Starting review:",
+                "[Worker] Processing review:",
                 {
                     deliveryId:
                         reviewTrigger.deliveryId,
-
-                    repository:
-                        reviewTrigger.repository,
-
-                    pullNumber:
-                        reviewTrigger.pullNumber,
-
-                    headSha:
-                        reviewTrigger.headSha,
                 }
             );
 
-            // Temporary fake AI work.
-            await sleep(3000);
+            await this.reviewProcessor
+                .process(
+                    reviewTrigger
+                );
+
+            await this.reviewJobStore
+                .updateStatus(
+                    reviewTrigger.deliveryId,
+                    "completed"
+                );
 
             console.log(
                 "[Worker] Review completed:",
                 {
                     deliveryId:
                         reviewTrigger.deliveryId,
-
-                    repository:
-                        reviewTrigger.repository,
-
-                    pullNumber:
-                        reviewTrigger.pullNumber,
-
-                    headSha:
-                        reviewTrigger.headSha,
                 }
             );
-        };
+        } catch (error: unknown) {
+            const errorMessage =
+                error instanceof Error
+                    ? error.message
+                    : "Unknown review error";
+
+            await this.reviewJobStore
+                .updateStatus(
+                    reviewTrigger.deliveryId,
+                    "failed",
+                    errorMessage
+                );
+
+            console.error(
+                "[Worker] Review failed:",
+                {
+                    deliveryId:
+                        reviewTrigger.deliveryId,
+
+                    error:
+                        errorMessage,
+                }
+            );
+        }
+    };
 }

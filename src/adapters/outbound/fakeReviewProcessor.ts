@@ -30,23 +30,26 @@ export class FakeReviewProcessor
             {
                 repository:
                     reviewTrigger.repository,
+
                 pullNumber:
                     reviewTrigger.pullNumber,
+
                 headSha:
                     reviewTrigger.headSha,
             }
         );
 
-        // Simulate slow AI work.
         await sleep(3000);
 
         console.log(
-            "[Reviewer] Review completed:",
+            "[Reviewer] AI review finished:",
             {
                 repository:
                     reviewTrigger.repository,
+
                 pullNumber:
                     reviewTrigger.pullNumber,
+
                 headSha:
                     reviewTrigger.headSha,
             }

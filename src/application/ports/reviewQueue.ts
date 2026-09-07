@@ -5,5 +5,5 @@ import type {
 export interface ReviewQueue {
     enqueue(
         reviewTrigger: ReviewTrigger
-    ): void;
+    ): Promise<void>;
 }
