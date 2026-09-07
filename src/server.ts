@@ -1,5 +1,17 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { createServer, type ServerResponse } from "node:http";
+import {
+    createHmac,
+    timingSafeEqual,
+} from "node:crypto";
+
+import {
+    createServer,
+    type IncomingMessage,
+    type ServerResponse,
+} from "node:http";
+
+// -------------------------------------
+// Types
+// -------------------------------------
 
 type SupportedAction =
     | "opened"
@@ -15,35 +27,71 @@ type ReviewTrigger = {
     sender: string | null;
 };
 
+// -------------------------------------
+// Constants
+// -------------------------------------
+
 const HOST = "127.0.0.1";
 const PORT = 3000;
 
-const SUPPORTED_ACTIONS = new Set<SupportedAction>([
-    "opened",
-    "reopened",
-    "synchronize",
-]);
+const MAX_BODY_BYTES =
+    2 * 1024 * 1024;
+
+const SUPPORTED_ACTIONS =
+    new Set<SupportedAction>([
+        "opened",
+        "reopened",
+        "synchronize",
+    ]);
+
+// TODO:
+// Replace in-memory delivery tracking
+// with durable idempotency storage
+// before production deployment.
+const SEEN_DELIVERIES =
+    new Set<string>();
+
+// -------------------------------------
+// Errors
+// -------------------------------------
+
+class BodyTooLargeError extends Error {
+    constructor() {
+        super(
+            "Request body exceeds maximum size"
+        );
+
+        this.name =
+            "BodyTooLargeError";
+    }
+}
 
 // -------------------------------------
 // Configuration
 // -------------------------------------
 
-const getRequiredEnv = (name: string): string => {
-    const value = process.env[name];
+const getRequiredEnv = (
+    name: string
+): string => {
+    const value =
+        process.env[name]?.trim();
 
     if (!value) {
-        throw new Error(`${name} is not configured`);
+        throw new Error(
+            `${name} is not configured`
+        );
     }
 
     return value;
 };
 
-const WEBHOOK_SECRET = getRequiredEnv(
-    "GITHUB_WEBHOOK_SECRET"
-);
+const WEBHOOK_SECRET =
+    getRequiredEnv(
+        "GITHUB_WEBHOOK_SECRET"
+    );
 
 // -------------------------------------
-// Response helper
+// HTTP helpers
 // -------------------------------------
 
 const sendJson = (
@@ -51,11 +99,85 @@ const sendJson = (
     statusCode: number,
     payload: Record<string, unknown>
 ): void => {
-    response.writeHead(statusCode, {
-        "Content-Type": "application/json",
-    });
+    const body =
+        JSON.stringify(payload);
 
-    response.end(JSON.stringify(payload));
+    response.writeHead(
+        statusCode,
+        {
+            "Content-Type":
+                "application/json; charset=utf-8",
+
+            "Content-Length":
+                Buffer.byteLength(body),
+        }
+    );
+
+    response.end(body);
+};
+
+const readRawBody = async (
+    request: IncomingMessage,
+    maxBodyBytes: number
+): Promise<Buffer> => {
+    const contentLength =
+        request.headers[
+            "content-length"
+        ];
+
+    if (
+        typeof contentLength === "string"
+    ) {
+        const declaredBytes =
+            Number(contentLength);
+
+        if (
+            Number.isFinite(
+                declaredBytes
+            ) &&
+            declaredBytes >
+                maxBodyBytes
+        ) {
+            throw new BodyTooLargeError();
+        }
+    }
+
+    const chunks: Buffer[] = [];
+
+    let totalBytes = 0;
+    let bodyTooLarge = false;
+
+    for await (
+        const chunk of request
+    ) {
+        const buffer =
+            Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(chunk);
+
+        totalBytes +=
+            buffer.length;
+
+        if (
+            totalBytes >
+            maxBodyBytes
+        ) {
+            bodyTooLarge = true;
+
+            continue;
+        }
+
+        chunks.push(buffer);
+    }
+
+    if (bodyTooLarge) {
+        throw new BodyTooLargeError();
+    }
+
+    return Buffer.concat(
+        chunks,
+        totalBytes
+    );
 };
 
 // -------------------------------------
@@ -77,12 +199,14 @@ const isSupportedAction = (
 ): value is SupportedAction => {
     return (
         typeof value === "string" &&
-        SUPPORTED_ACTIONS.has(value as SupportedAction)
+        SUPPORTED_ACTIONS.has(
+            value as SupportedAction
+        )
     );
 };
 
 // -------------------------------------
-// Payload validation
+// GitHub payload validation
 // -------------------------------------
 
 const parseReviewTrigger = (
@@ -101,13 +225,17 @@ const parseReviewTrigger = (
         sender,
     } = value;
 
-    if (!isSupportedAction(action)) {
+    if (
+        !isSupportedAction(action)
+    ) {
         return null;
     }
 
     if (
         typeof pullNumber !== "number" ||
-        !Number.isSafeInteger(pullNumber) ||
+        !Number.isSafeInteger(
+            pullNumber
+        ) ||
         pullNumber <= 0
     ) {
         return null;
@@ -115,20 +243,25 @@ const parseReviewTrigger = (
 
     if (
         !isRecord(repository) ||
-        typeof repository.full_name !== "string" ||
-        repository.full_name.length === 0
+        typeof repository.full_name !==
+            "string" ||
+        repository.full_name.length ===
+            0
     ) {
         return null;
     }
 
     if (
         !isRecord(pullRequest) ||
-        !isRecord(pullRequest.head)
+        !isRecord(
+            pullRequest.head
+        )
     ) {
         return null;
     }
 
-    const headSha = pullRequest.head.sha;
+    const headSha =
+        pullRequest.head.sha;
 
     if (
         typeof headSha !== "string" ||
@@ -139,14 +272,16 @@ const parseReviewTrigger = (
 
     const senderLogin =
         isRecord(sender) &&
-        typeof sender.login === "string"
+        typeof sender.login ===
+            "string"
             ? sender.login
             : null;
 
     return {
         deliveryId,
         action,
-        repository: repository.full_name,
+        repository:
+            repository.full_name,
         pullNumber,
         headSha,
         sender: senderLogin,
@@ -154,182 +289,426 @@ const parseReviewTrigger = (
 };
 
 // -------------------------------------
-// Signature verification
+// GitHub signature verification
 // -------------------------------------
 
 const verifyGitHubSignature = (
     rawBody: Buffer,
     signature: string
 ): boolean => {
-    if (!/^sha256=[a-f0-9]{64}$/.test(signature)) {
+    const isValidFormat =
+        /^sha256=[a-f0-9]{64}$/.test(
+            signature
+        );
+
+    if (!isValidFormat) {
         return false;
     }
 
     const expectedSignature =
         "sha256=" +
-        createHmac("sha256", WEBHOOK_SECRET)
+        createHmac(
+            "sha256",
+            WEBHOOK_SECRET
+        )
             .update(rawBody)
             .digest("hex");
 
-    const expectedBuffer = Buffer.from(expectedSignature);
-    const receivedBuffer = Buffer.from(signature);
+    const expectedBuffer =
+        Buffer.from(
+            expectedSignature
+        );
 
-    if (expectedBuffer.length !== receivedBuffer.length) {
+    const receivedBuffer =
+        Buffer.from(signature);
+
+    if (
+        expectedBuffer.length !==
+        receivedBuffer.length
+    ) {
         return false;
     }
 
-    return timingSafeEqual(expectedBuffer, receivedBuffer);
+    return timingSafeEqual(
+        expectedBuffer,
+        receivedBuffer
+    );
 };
 
 // -------------------------------------
-// HTTP server
+// GitHub webhook handler
 // -------------------------------------
 
-const server = createServer(async (request, response) => {
-    console.log(`${request.method} ${request.url}`);
+const handleGitHubWebhook = async (
+    request: IncomingMessage,
+    response: ServerResponse
+): Promise<void> => {
+    const githubEvent =
+        request.headers[
+            "x-github-event"
+        ];
 
-    // GET /health
+    const githubDelivery =
+        request.headers[
+            "x-github-delivery"
+        ];
+
+    const githubSignature =
+        request.headers[
+            "x-hub-signature-256"
+        ];
+
+    // -------------------------------------
+    // Validate required headers
+    // -------------------------------------
+
+    if (
+        typeof githubEvent !== "string" ||
+        typeof githubDelivery !==
+            "string" ||
+        typeof githubSignature !==
+            "string"
+    ) {
+        sendJson(
+            response,
+            400,
+            {
+                error:
+                    "Missing required GitHub headers",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Read bounded raw request body
+    // -------------------------------------
+
+    let rawBody: Buffer;
+
+    try {
+        rawBody =
+            await readRawBody(
+                request,
+                MAX_BODY_BYTES
+            );
+    } catch (error: unknown) {
+        if (
+            error instanceof
+            BodyTooLargeError
+        ) {
+            sendJson(
+                response,
+                413,
+                {
+                    error:
+                        "Webhook payload is too large",
+                }
+            );
+
+            return;
+        }
+
+        throw error;
+    }
+
+    // -------------------------------------
+    // Authenticate webhook
+    // -------------------------------------
+
+    if (
+        !verifyGitHubSignature(
+            rawBody,
+            githubSignature
+        )
+    ) {
+        sendJson(
+            response,
+            401,
+            {
+                error:
+                    "Invalid webhook signature",
+            }
+        );
+
+        return;
+    }
+
+    console.log(
+        "GitHub Event:",
+        githubEvent
+    );
+
+    console.log(
+        "GitHub Delivery:",
+        githubDelivery
+    );
+
+    // -------------------------------------
+    // Filter GitHub event type
+    // -------------------------------------
+
+    if (
+        githubEvent !==
+        "pull_request"
+    ) {
+        sendJson(
+            response,
+            200,
+            {
+                status: "ignored",
+                reason:
+                    "Unsupported GitHub event",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Parse JSON
+    // -------------------------------------
+
+    let parsedPayload: unknown;
+
+    try {
+        parsedPayload =
+            JSON.parse(
+                rawBody.toString(
+                    "utf8"
+                )
+            );
+    } catch {
+        sendJson(
+            response,
+            400,
+            {
+                error:
+                    "Invalid JSON",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Validate basic payload structure
+    // -------------------------------------
+
+    if (
+        !isRecord(
+            parsedPayload
+        ) ||
+        typeof parsedPayload.action !==
+            "string"
+    ) {
+        sendJson(
+            response,
+            400,
+            {
+                error:
+                    "Invalid pull request payload",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Filter supported PR actions
+    // -------------------------------------
+
+    if (
+        !isSupportedAction(
+            parsedPayload.action
+        )
+    ) {
+        sendJson(
+            response,
+            200,
+            {
+                status: "ignored",
+                reason:
+                    "Unsupported pull request action",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Build validated review trigger
+    // -------------------------------------
+
+    const reviewTrigger =
+        parseReviewTrigger(
+            parsedPayload,
+            githubDelivery
+        );
+
+    if (
+        reviewTrigger === null
+    ) {
+        sendJson(
+            response,
+            400,
+            {
+                error:
+                    "Invalid pull request payload",
+            }
+        );
+
+        return;
+    }
+
+    // -------------------------------------
+    // Duplicate delivery protection
+    // -------------------------------------
+
+    if (
+        SEEN_DELIVERIES.has(
+            githubDelivery
+        )
+    ) {
+        sendJson(
+            response,
+            200,
+            {
+                status:
+                    "duplicate",
+            }
+        );
+
+        return;
+    }
+
+    SEEN_DELIVERIES.add(
+        githubDelivery
+    );
+
+    // -------------------------------------
+    // Review trigger accepted
+    // -------------------------------------
+
+    console.log(
+        "Review trigger:",
+        reviewTrigger
+    );
+
+    sendJson(
+        response,
+        200,
+        {
+            status:
+                "received",
+        }
+    );
+};
+
+// -------------------------------------
+// Routing
+// -------------------------------------
+
+const handleRequest = async (
+    request: IncomingMessage,
+    response: ServerResponse
+): Promise<void> => {
+    console.log(
+        `${request.method} ${request.url}`
+    );
+
     if (
         request.method === "GET" &&
         request.url === "/health"
     ) {
-        sendJson(response, 200, {
-            status: "ok",
-        });
+        sendJson(
+            response,
+            200,
+            {
+                status: "ok",
+            }
+        );
 
         return;
     }
 
-    // Reject unmatched routes.
     if (
-        request.method !== "POST" ||
-        request.url !== "/webhooks/github"
+        request.method === "POST" &&
+        request.url ===
+            "/webhooks/github"
     ) {
-        sendJson(response, 404, {
+        await handleGitHubWebhook(
+            request,
+            response
+        );
+
+        return;
+    }
+
+    sendJson(
+        response,
+        404,
+        {
             error: "Not found",
-        });
+        }
+    );
+};
 
-        return;
-    }
+// -------------------------------------
+// Server lifecycle
+// -------------------------------------
 
-    // Validate required headers.
-    const githubEvent = request.headers["x-github-event"];
-    const githubDelivery = request.headers["x-github-delivery"];
-    const githubSignature = request.headers["x-hub-signature-256"];
+const server =
+    createServer(
+        (
+            request,
+            response
+        ) => {
+            void handleRequest(
+                request,
+                response
+            ).catch(
+                (
+                    error: unknown
+                ) => {
+                    console.error(
+                        "Unhandled request error:",
+                        error
+                    );
 
-    if (
-        typeof githubEvent !== "string" ||
-        typeof githubDelivery !== "string" ||
-        typeof githubSignature !== "string"
-    ) {
-        sendJson(response, 400, {
-            error: "Missing required GitHub headers",
-        });
+                    if (
+                        !response.headersSent &&
+                        !response.destroyed
+                    ) {
+                        sendJson(
+                            response,
+                            500,
+                            {
+                                error:
+                                    "Internal server error",
+                            }
+                        );
 
-        return;
-    }
+                        return;
+                    }
 
-    // Read the original request bytes for signature verification.
-    const chunks: Buffer[] = [];
-
-    try {
-        for await (const chunk of request) {
-            chunks.push(
-                Buffer.isBuffer(chunk)
-                    ? chunk
-                    : Buffer.from(chunk)
+                    if (
+                        !response.destroyed
+                    ) {
+                        response.end();
+                    }
+                }
             );
         }
-    } catch {
-        if (!response.destroyed) {
-            sendJson(response, 400, {
-                error: "Unable to read request body",
-            });
-        }
-
-        return;
-    }
-
-    const rawBody = Buffer.concat(chunks);
-
-    // Authenticate before processing the payload.
-    if (!verifyGitHubSignature(rawBody, githubSignature)) {
-        sendJson(response, 401, {
-            error: "Invalid webhook signature",
-        });
-
-        return;
-    }
-
-    console.log("GitHub Event:", githubEvent);
-    console.log("GitHub Delivery:", githubDelivery);
-
-    // Ignore unsupported events.
-    if (githubEvent !== "pull_request") {
-        sendJson(response, 200, {
-            status: "ignored",
-            reason: "Unsupported GitHub event",
-        });
-
-        return;
-    }
-
-    // Parse JSON separately from payload validation.
-    let parsedPayload: unknown;
-
-    try {
-        parsedPayload = JSON.parse(rawBody.toString("utf8"));
-    } catch {
-        sendJson(response, 400, {
-            error: "Invalid JSON",
-        });
-
-        return;
-    }
-
-    // Validate the payload structure and action type.
-    if (
-        !isRecord(parsedPayload) ||
-        typeof parsedPayload.action !== "string"
-    ) {
-        sendJson(response, 400, {
-            error: "Invalid pull request payload",
-        });
-
-        return;
-    }
-
-    // Ignore actions that should not trigger a review.
-    if (!isSupportedAction(parsedPayload.action)) {
-        sendJson(response, 200, {
-            status: "ignored",
-            reason: "Unsupported pull request action",
-        });
-
-        return;
-    }
-
-    // Validate required fields and build the review trigger.
-    const reviewTrigger = parseReviewTrigger(
-        parsedPayload,
-        githubDelivery
     );
 
-    if (reviewTrigger === null) {
-        sendJson(response, 400, {
-            error: "Invalid pull request payload",
-        });
-
-        return;
+server.listen(
+    PORT,
+    HOST,
+    () => {
+        console.log(
+            `Server running at http://${HOST}:${PORT}`
+        );
     }
-
-    console.log("Review trigger:", reviewTrigger);
-
-    sendJson(response, 200, {
-        status: "received",
-    });
-});
-
-server.listen(PORT, HOST, () => {
-    console.log(`Server running at http://${HOST}:${PORT}`);
-});
+);
