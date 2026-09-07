@@ -10,6 +10,7 @@ import type {
 
 import type {
     EnqueuePullRequestReview,
+    EnqueuePullRequestReviewResult,
 } from "../../application/useCases/enqueuePullRequestReview.ts";
 
 import {
@@ -24,19 +25,32 @@ import {
     sendJson,
 } from "../../infrastructure/http.ts";
 
+// -------------------------------------
+// Dependencies
+// -------------------------------------
+
 type GitHubWebhookDependencies = {
     webhookSecret: string;
     maxBodyBytes: number;
+
     enqueuePullRequestReview:
         EnqueuePullRequestReview;
 };
 
+// -------------------------------------
+// In-memory delivery tracking
+// -------------------------------------
+
 // TODO:
-// Replace this GitHub-delivery tracking
+// Replace this GitHub delivery tracking
 // with durable idempotency storage
 // before production deployment.
 const SEEN_DELIVERIES =
     new Set<string>();
+
+// -------------------------------------
+// Type guards
+// -------------------------------------
 
 const isRecord = (
     value: unknown
@@ -58,6 +72,10 @@ const isSupportedAction = (
         )
     );
 };
+
+// -------------------------------------
+// GitHub payload validation
+// -------------------------------------
 
 const parseReviewTrigger = (
     value: unknown,
@@ -82,8 +100,7 @@ const parseReviewTrigger = (
     }
 
     if (
-        typeof pullNumber !==
-            "number" ||
+        typeof pullNumber !== "number" ||
         !Number.isSafeInteger(
             pullNumber
         ) ||
@@ -115,8 +132,7 @@ const parseReviewTrigger = (
         pullRequest.head.sha;
 
     if (
-        typeof headSha !==
-            "string" ||
+        typeof headSha !== "string" ||
         headSha.length === 0
     ) {
         return null;
@@ -132,14 +148,21 @@ const parseReviewTrigger = (
     return {
         deliveryId,
         action,
+
         repository:
             repository.full_name,
+
         pullNumber,
         headSha,
+
         sender:
             senderLogin,
     };
 };
+
+// -------------------------------------
+// GitHub signature verification
+// -------------------------------------
 
 const verifyGitHubSignature = (
     rawBody: Buffer,
@@ -187,6 +210,10 @@ const verifyGitHubSignature = (
     );
 };
 
+// -------------------------------------
+// GitHub webhook handler
+// -------------------------------------
+
 export const createGitHubWebhookHandler = (
     dependencies:
         GitHubWebhookDependencies
@@ -201,6 +228,10 @@ export const createGitHubWebhookHandler = (
         request: IncomingMessage,
         response: ServerResponse
     ): Promise<void> => {
+        // -------------------------------------
+        // Read GitHub headers
+        // -------------------------------------
+
         const githubEvent =
             request.headers[
                 "x-github-event"
@@ -216,7 +247,9 @@ export const createGitHubWebhookHandler = (
                 "x-hub-signature-256"
             ];
 
-        // Validate required headers.
+        // -------------------------------------
+        // Validate required headers
+        // -------------------------------------
 
         if (
             typeof githubEvent !==
@@ -238,7 +271,9 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Read bounded raw body.
+        // -------------------------------------
+        // Read bounded raw body
+        // -------------------------------------
 
         let rawBody: Buffer;
 
@@ -270,7 +305,9 @@ export const createGitHubWebhookHandler = (
             throw error;
         }
 
-        // Authenticate webhook.
+        // -------------------------------------
+        // Authenticate webhook
+        // -------------------------------------
 
         if (
             !verifyGitHubSignature(
@@ -301,11 +338,13 @@ export const createGitHubWebhookHandler = (
             githubDelivery
         );
 
-        // Ignore unsupported GitHub events.
+        // -------------------------------------
+        // Filter GitHub event type
+        // -------------------------------------
 
         if (
             githubEvent !==
-                "pull_request"
+            "pull_request"
         ) {
             sendJson(
                 response,
@@ -322,7 +361,9 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Parse JSON.
+        // -------------------------------------
+        // Parse JSON
+        // -------------------------------------
 
         let parsedPayload: unknown;
 
@@ -346,7 +387,9 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Validate basic payload structure.
+        // -------------------------------------
+        // Validate basic payload structure
+        // -------------------------------------
 
         if (
             !isRecord(
@@ -367,7 +410,9 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Ignore unsupported PR actions.
+        // -------------------------------------
+        // Filter supported PR actions
+        // -------------------------------------
 
         if (
             !isSupportedAction(
@@ -389,8 +434,10 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Convert GitHub JSON
-        // into our domain model.
+        // -------------------------------------
+        // Convert GitHub payload
+        // into our domain model
+        // -------------------------------------
 
         const reviewTrigger =
             parseReviewTrigger(
@@ -413,7 +460,11 @@ export const createGitHubWebhookHandler = (
             return;
         }
 
-        // Duplicate GitHub delivery.
+        // -------------------------------------
+        // Transport-level idempotency
+        //
+        // Same X-GitHub-Delivery
+        // -------------------------------------
 
         if (
             SEEN_DELIVERIES.has(
@@ -426,34 +477,110 @@ export const createGitHubWebhookHandler = (
                 {
                     status:
                         "duplicate",
+
+                    reason:
+                        "This GitHub delivery has already been accepted",
                 }
             );
 
             return;
         }
 
-        // Call the APPLICATION.
-        //
-        // The GitHub adapter does not know
-        // which queue implementation is used.
+        /*
+         * Claim the delivery BEFORE crossing
+         * the async boundary.
+         *
+         * There is intentionally no `await`
+         * between:
+         *
+         *     SEEN_DELIVERIES.has(...)
+         *
+         * and:
+         *
+         *     SEEN_DELIVERIES.add(...)
+         *
+         * This prevents two concurrent requests
+         * in this Node process from both passing
+         * the delivery duplicate check.
+         */
 
-        enqueuePullRequestReview(
-            reviewTrigger
-        );
-
-        // Only mark it accepted after
-        // enqueueing succeeded.
         SEEN_DELIVERIES.add(
             githubDelivery
         );
+
+        // -------------------------------------
+        // Business-level idempotency
+        //
+        // repository + PR + head SHA
+        // -------------------------------------
+
+        let result:
+            EnqueuePullRequestReviewResult;
+
+        try {
+            result =
+                await enqueuePullRequestReview(
+                    reviewTrigger
+                );
+        } catch (
+            error: unknown
+        ) {
+            /*
+             * We failed to accept the review job.
+             *
+             * Remove the delivery claim so GitHub
+             * can retry the same delivery later.
+             */
+
+            SEEN_DELIVERIES.delete(
+                githubDelivery
+            );
+
+            throw error;
+        }
+
+        // -------------------------------------
+        // Same PR commit already queued/reviewed
+        // -------------------------------------
+
+        if (
+            result.status ===
+            "duplicate"
+        ) {
+            sendJson(
+                response,
+                200,
+                {
+                    status:
+                        "duplicate",
+
+                    reason:
+                        "This PR commit has already been queued or reviewed",
+
+                    reviewKey:
+                        result.reviewKey,
+                }
+            );
+
+            return;
+        }
+
+        // -------------------------------------
+        // Review successfully queued
+        // -------------------------------------
 
         sendJson(
             response,
             202,
             {
-                status: "queued",
+                status:
+                    "queued",
+
                 deliveryId:
                     githubDelivery,
+
+                reviewKey:
+                    result.reviewKey,
             }
         );
     };

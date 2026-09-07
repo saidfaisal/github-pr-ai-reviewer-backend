@@ -1,7 +1,7 @@
 info:
-  name: Post Review Status
+  name: Valid PR Opened Different Id
   type: http
-  seq: 18
+  seq: 3
 
 http:
   method: POST
@@ -12,7 +12,7 @@ http:
     - name: X-Github-Event
       value: pull_request
     - name: X-Github-Delivery
-      value: status-test-001
+      value: local-test-100
   body:
     type: json
     data: |-

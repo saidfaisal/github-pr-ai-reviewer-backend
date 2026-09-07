@@ -12,7 +12,7 @@ http:
     - name: X-Github-Event
       value: pull_request
     - name: X-Github-Delivery
-      value: local-test-002
+      value: local-test-001
   body:
     type: json
     data: |-
@@ -24,7 +24,7 @@ http:
         },
         "pull_request": {
           "head": {
-            "sha": "abc123def456"
+            "sha": "abc123de"
           }
         },
         "sender": {

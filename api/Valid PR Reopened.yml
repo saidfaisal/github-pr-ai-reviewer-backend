@@ -1,7 +1,7 @@
 info:
   name: Valid PR Reopened
   type: http
-  seq: 3
+  seq: 4
 
 http:
   method: POST
@@ -17,7 +17,7 @@ http:
     type: json
     data: |-
       {
-        "action": "opened",
+        "action": "reopened",
         "number": 42,
         "repository": {
           "full_name": "example/android-app"

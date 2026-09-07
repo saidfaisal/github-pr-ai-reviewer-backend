@@ -1,7 +1,7 @@
 info:
   name: Missing Event Header
   type: http
-  seq: 5
+  seq: 7
 
 http:
   method: POST

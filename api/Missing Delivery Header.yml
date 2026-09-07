@@ -11,8 +11,6 @@ http:
       value: application/json
     - name: X-Github-Event
       value: pull_request
-    - name: X-Github-Delivery
-      value: local-test-003
   body:
     type: json
     data: |-

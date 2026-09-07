@@ -1,7 +1,7 @@
 info:
   name: Missing Head SHA
   type: http
-  seq: 14
+  seq: 15
 
 http:
   method: POST

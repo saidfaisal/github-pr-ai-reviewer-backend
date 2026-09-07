@@ -10,24 +10,42 @@ import type {
 export class InMemoryReviewJobStore
     implements ReviewJobStore {
 
-    private readonly jobs =
+    private readonly jobsByDeliveryId = 
+        new Map<string, ReviewJob>();
+
+    private readonly jobsByReviewKey = 
         new Map<string, ReviewJob>();
 
     async save(
         job: ReviewJob
     ): Promise<void> {
-        this.jobs.set(
+        this.jobsByDeliveryId.set(
             job.trigger.deliveryId,
             job
         );
+
+        this.jobsByReviewKey.set(
+            job.reviewKey,
+            job
+        )
     }
 
     async findByDeliveryId(
         deliveryId: string
     ): Promise<ReviewJob | null> {
         return (
-            this.jobs.get(
+            this.jobsByDeliveryId.get(
                 deliveryId
+            ) ?? null
+        );
+    }
+
+    async findByReviewKey(
+    reviewKey: string
+    ): Promise<ReviewJob | null> {
+        return (
+            this.jobsByReviewKey.get(
+                reviewKey
             ) ?? null
         );
     }
@@ -38,7 +56,7 @@ export class InMemoryReviewJobStore
         error: string | null = null
     ): Promise<void> {
         const existingJob =
-            this.jobs.get(
+            this.jobsByDeliveryId.get(
                 deliveryId
             );
 
@@ -46,15 +64,22 @@ export class InMemoryReviewJobStore
             return;
         }
 
-        this.jobs.set(
+        const updatedJob: ReviewJob = {
+            ...existingJob,
+            status,
+            error,
+            updatedAt:
+                new Date().toISOString(),
+        };
+
+        this.jobsByDeliveryId.set(
             deliveryId,
-            {
-                ...existingJob,
-                status,
-                error,
-                updatedAt:
-                    new Date().toISOString(),
-            }
+            updatedJob
+        );
+
+        this.jobsByReviewKey.set(
+            updatedJob.reviewKey,
+            updatedJob
         );
     }
 }

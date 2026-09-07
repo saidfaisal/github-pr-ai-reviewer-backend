@@ -12,6 +12,10 @@ export interface ReviewJobStore {
         deliveryId: string
     ): Promise<ReviewJob | null>;
 
+     findByReviewKey(
+        reviewKey: string
+    ): Promise<ReviewJob | null>;
+
     updateStatus(
         deliveryId: string,
         status: ReviewStatus,

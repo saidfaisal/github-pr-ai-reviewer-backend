@@ -12,13 +12,13 @@ http:
     - name: X-Github-Event
       value: pull_request
     - name: X-Github-Delivery
-      value: local-test-001
+      value: local-test-009
   body:
     type: json
     data: |-
       {
         "action": "opened",
-        "number": 42,
+        "number": "42",
         "repository": {
           "full_name": "example/android-app"
         },
