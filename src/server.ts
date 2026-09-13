@@ -9,30 +9,35 @@ import {
 } from "./application/useCases/enqueuePullRequestReview.ts";
 
 import {
-    createGitHubWebhookHandler,
-} from "./adapters/inbound/githubWebhook.ts";
-
-import {
-    InMemoryReviewQueue,
-} from "./adapters/outbound/inMemoryReviewQueue.ts";
-
-import {
-    InMemoryReviewJobStore,
-} from "./adapters/outbound/inMemoryReviewJobStore.ts";
-
-import {
-    FakeReviewProcessor,
-} from "./adapters/outbound/fakeReviewProcessor.ts";
-
-import {
     createGetReviewJob,
 } from "./application/useCases/getReviewJob.ts";
+
+import {
+    createGitHubWebhookHandler,
+} from "./adapters/inbound/githubWebhook.ts";
 
 import {
     createReviewStatusHandler,
 } from "./adapters/inbound/reviewStatus.ts";
 
 import {
+    FakeReviewProcessor,
+} from "./adapters/outbound/fakeReviewProcessor.ts";
+
+import {
+    GitHubRestPullRequestReader,
+} from "./adapters/outbound/githubRestPullRequestReader.ts";
+
+import {
+    InMemoryReviewJobStore,
+} from "./adapters/outbound/inMemoryReviewJobStore.ts";
+
+import {
+    InMemoryReviewQueue,
+} from "./adapters/outbound/inMemoryReviewQueue.ts";
+
+import {
+    GITHUB_TOKEN,
     GITHUB_WEBHOOK_SECRET,
     HOST,
     MAX_BODY_BYTES,
@@ -43,6 +48,7 @@ import {
     sendJson,
 } from "./infrastructure/http.ts";
 
+
 // -------------------------------------
 // Dependency wiring
 // -------------------------------------
@@ -50,8 +56,16 @@ import {
 const reviewJobStore =
     new InMemoryReviewJobStore();
 
+const pullRequestReader =
+    new GitHubRestPullRequestReader({
+        token:
+            GITHUB_TOKEN,
+    });
+
 const reviewProcessor =
-    new FakeReviewProcessor();
+    new FakeReviewProcessor({
+        pullRequestReader,
+    });
 
 const reviewQueue =
     new InMemoryReviewQueue(
@@ -64,6 +78,12 @@ const enqueuePullRequestReview =
         reviewQueue,
         reviewJobStore,
     });
+
+const getReviewJob =
+    createGetReviewJob(
+        reviewJobStore
+    );
+
 const handleGitHubWebhook =
     createGitHubWebhookHandler({
         webhookSecret:
@@ -74,11 +94,6 @@ const handleGitHubWebhook =
 
         enqueuePullRequestReview,
     });
-
-const getReviewJob =
-    createGetReviewJob(
-        reviewJobStore
-    );
 
 const handleReviewStatus =
     createReviewStatusHandler({
@@ -94,19 +109,15 @@ const handleRequest = async (
     request: IncomingMessage,
     response: ServerResponse
 ): Promise<void> => {
-    console.log(
-        `${request.method} ${request.url}`
-    );
-
     const url =
         new URL(
             request.url ?? "/",
             `http://${HOST}`
         );
 
-    // -------------------------------------
-    // Health
-    // -------------------------------------
+    console.log(
+        `${request.method} ${url.pathname}`
+    );
 
     if (
         request.method === "GET" &&
@@ -123,14 +134,9 @@ const handleRequest = async (
         return;
     }
 
-    // -------------------------------------
-    // GitHub webhook
-    // -------------------------------------
-
     if (
         request.method === "POST" &&
-        url.pathname ===
-            "/webhooks/github"
+        url.pathname === "/webhooks/github"
     ) {
         await handleGitHubWebhook(
             request,
@@ -139,10 +145,6 @@ const handleRequest = async (
 
         return;
     }
-
-    // -------------------------------------
-    // Review status
-    // -------------------------------------
 
     const reviewStatusMatch =
         url.pathname.match(
@@ -166,10 +168,6 @@ const handleRequest = async (
         return;
     }
 
-    // -------------------------------------
-    // Not found
-    // -------------------------------------
-
     sendJson(
         response,
         404,
@@ -178,6 +176,7 @@ const handleRequest = async (
         }
     );
 };
+
 
 // -------------------------------------
 // Server

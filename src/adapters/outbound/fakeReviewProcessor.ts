@@ -1,57 +1,78 @@
 import type {
+    PullRequestReader,
+} from "../../application/ports/pullRequestReader.ts";
+
+import type {
     ReviewProcessor,
 } from "../../application/ports/reviewProcessor.ts";
+
+import {
+    buildReviewInput,
+} from "../../application/review/buildReviewInput.ts";
 
 import type {
     ReviewTrigger,
 } from "../../domain/review.ts";
 
-const sleep = (
-    milliseconds: number
-): Promise<void> => {
-    return new Promise(
-        (resolve) => {
-            setTimeout(
-                resolve,
-                milliseconds
-            );
-        }
-    );
+type FakeReviewProcessorDependencies = {
+    pullRequestReader: PullRequestReader;
 };
 
 export class FakeReviewProcessor
     implements ReviewProcessor {
 
+    private readonly pullRequestReader:
+        PullRequestReader;
+
+    constructor(
+        dependencies:
+            FakeReviewProcessorDependencies
+    ) {
+        this.pullRequestReader =
+            dependencies.pullRequestReader;
+    }
+
     async process(
         reviewTrigger: ReviewTrigger
     ): Promise<void> {
+        const pullRequest =
+            await this.pullRequestReader
+                .getPullRequest(
+                    reviewTrigger
+                );
+
+        const reviewInput =
+            buildReviewInput(
+                pullRequest
+            );
+
         console.log(
-            "[Reviewer] Starting review:",
-            {
-                repository:
-                    reviewTrigger.repository,
-
-                pullNumber:
-                    reviewTrigger.pullNumber,
-
-                headSha:
-                    reviewTrigger.headSha,
-            }
+            "\n========== REVIEW INPUT ==========\n"
         );
 
-        await sleep(3000);
+        console.log(
+            reviewInput
+        );
 
         console.log(
-            "[Reviewer] AI review finished:",
-            {
-                repository:
-                    reviewTrigger.repository,
+            "\n======== END REVIEW INPUT ========\n"
+        );
 
-                pullNumber:
-                    reviewTrigger.pullNumber,
+        for (
+            const file
+            of pullRequest.changedFiles
+        ) {
+            console.log(
+                `[review] - ${file.filename}`
+            );
+        }
 
-                headSha:
-                    reviewTrigger.headSha,
+        await new Promise<void>(
+            (resolve) => {
+                setTimeout(
+                    resolve,
+                    3000
+                );
             }
         );
     }

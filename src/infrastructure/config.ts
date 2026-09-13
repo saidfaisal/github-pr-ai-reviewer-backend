@@ -26,3 +26,8 @@ export const GITHUB_WEBHOOK_SECRET =
     getRequiredEnv(
         "GITHUB_WEBHOOK_SECRET"
     );
+
+export const GITHUB_TOKEN =
+    getRequiredEnv(
+        "GITHUB_TOKEN"
+    );

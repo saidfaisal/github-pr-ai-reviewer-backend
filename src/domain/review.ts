@@ -33,6 +33,27 @@ export type ReviewIdentity = {
     headSha: string;
 }
 
+export type PullRequestContext = {
+    repository: string;
+    pullNumber: number;
+    title: string;
+    body: string | null;
+    baseBranch: string;
+    headBranch: string;
+    headSha: string;
+    author: string | null;
+    changedFiles: PullRequestFile[];
+}
+
+export type PullRequestFile = {
+    filename: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    changes: number;
+    patch: string | null;
+}
+
 export const createReviewKey = (
     identity: ReviewIdentity
 ): string => {
@@ -49,4 +70,3 @@ export const SUPPORTED_ACTIONS =
         "reopened",
         "synchronize",
     ]);
-
