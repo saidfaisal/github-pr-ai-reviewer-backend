@@ -21,8 +21,8 @@ import {
 } from "./adapters/inbound/reviewStatus.ts";
 
 import {
-    FakeReviewProcessor,
-} from "./adapters/outbound/fakeReviewProcessor.ts";
+    PullRequestReviewProcessor,
+} from "./application/review/pullRequestReviewProcessor.ts";
 
 import {
     GitHubRestPullRequestReader,
@@ -35,6 +35,14 @@ import {
 import {
     InMemoryReviewQueue,
 } from "./adapters/outbound/inMemoryReviewQueue.ts";
+
+import {
+    FakeReviewAnalyzer,
+} from "./adapters/outbound/fakeReviewAnalyzer.ts";
+
+import {
+    GitHubRestReviewPublisher,
+} from "./adapters/outbound/githubRestReviewPublisher.ts";
 
 import {
     GITHUB_TOKEN,
@@ -62,9 +70,19 @@ const pullRequestReader =
             GITHUB_TOKEN,
     });
 
+const reviewAnalyzer = new FakeReviewAnalyzer();
+
+const reviewPublisher =
+    new GitHubRestReviewPublisher({
+        token:
+            GITHUB_TOKEN,
+    });
+
 const reviewProcessor =
-    new FakeReviewProcessor({
+    new PullRequestReviewProcessor({
         pullRequestReader,
+        reviewAnalyzer,
+        reviewPublisher,
     });
 
 const reviewQueue =
@@ -99,7 +117,6 @@ const handleReviewStatus =
     createReviewStatusHandler({
         getReviewJob,
     });
-
 
 // -------------------------------------
 // Routing

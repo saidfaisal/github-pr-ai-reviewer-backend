@@ -70,3 +70,36 @@ export const SUPPORTED_ACTIONS =
         "reopened",
         "synchronize",
     ]);
+
+export type ReviewSeverity =
+    | "low"
+    | "medium"
+    | "high";
+
+export type ReviewRecommendation =
+    | "approve"
+    | "request_changes";
+
+export type ReviewFinding = {
+    filePath: string;
+    line: number | null;
+
+    severity:
+        ReviewSeverity;
+
+    title: string;
+    explanation: string;
+
+    suggestion:
+        string | null;
+};
+
+export type ReviewResult = {
+    summary: string;
+
+    recommendation:
+        ReviewRecommendation;
+
+    findings:
+        ReviewFinding[];
+};
