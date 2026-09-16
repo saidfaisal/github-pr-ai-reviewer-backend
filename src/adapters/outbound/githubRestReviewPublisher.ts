@@ -4,12 +4,22 @@ import type {
 
 import type {
     PullRequestContext,
+    ReviewFinding,
     ReviewResult,
 } from "../../domain/review.ts";
+
 
 type GitHubRestReviewPublisherDependencies = {
     token: string;
 };
+
+type GitHubReviewComment = {
+    path: string;
+    line: number;
+    side: "RIGHT";
+    body: string;
+};
+
 
 export class GitHubRestReviewPublisher
     implements ReviewPublisher {
@@ -38,10 +48,37 @@ export class GitHubRestReviewPublisher
         const url =
             `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repositoryName)}/pulls/${pullRequest.pullNumber}/reviews`;
 
+        const {
+            comments,
+            nonInlineFindings,
+        } = this.buildInlineComments(
+            pullRequest,
+            reviewResult
+        );
+
         const body =
             this.buildReviewBody(
-                reviewResult
+                reviewResult,
+                nonInlineFindings
             );
+
+        const payload = {
+            commit_id:
+                pullRequest.headSha,
+
+            body,
+
+            event:
+                "COMMENT",
+
+            ...(
+                comments.length > 0
+                    ? {
+                        comments,
+                    }
+                    : {}
+            ),
+        };
 
         const response =
             await fetch(
@@ -54,15 +91,9 @@ export class GitHubRestReviewPublisher
                         this.createHeaders(),
 
                     body:
-                        JSON.stringify({
-                            commit_id:
-                                pullRequest.headSha,
-
-                            body,
-
-                            event:
-                                "COMMENT",
-                        }),
+                        JSON.stringify(
+                            payload
+                        ),
                 }
             );
 
@@ -73,12 +104,303 @@ export class GitHubRestReviewPublisher
             throw new Error(
                 [
                     "GitHub review publish failed.",
-                    `Status: ${response.status}`,
+                    `Status: ${response.status}.`,
                     `Response: ${responseBody}`,
                 ].join(" ")
             );
         }
+
+        console.log(
+            `[review] Published ${comments.length} inline comment(s)`
+        );
     }
+
+
+    // -------------------------------------
+    // GitHub review mapping
+    // -------------------------------------
+
+    private buildInlineComments = (
+        pullRequest: PullRequestContext,
+        reviewResult: ReviewResult
+    ): {
+        comments: GitHubReviewComment[];
+        nonInlineFindings:
+            ReviewResult["findings"];
+    } => {
+        const comments:
+            GitHubReviewComment[] = [];
+
+        const nonInlineFindings:
+            ReviewResult["findings"] = [];
+
+        for (
+            const finding
+            of reviewResult.findings
+        ) {
+            if (finding.line === null) {
+                nonInlineFindings.push(
+                    finding
+                );
+
+                continue;
+            }
+
+            const file =
+                pullRequest.changedFiles.find(
+                    (
+                        changedFile
+                    ) =>
+                        changedFile.filename ===
+                        finding.filePath
+                );
+
+            if (
+                !file ||
+                !file.patch
+            ) {
+                nonInlineFindings.push(
+                    finding
+                );
+
+                continue;
+            }
+
+            const reviewableLines =
+                this.getReviewableRightSideLines(
+                    file.patch
+                );
+
+            if (
+                !reviewableLines.has(
+                    finding.line
+                )
+            ) {
+                nonInlineFindings.push(
+                    finding
+                );
+
+                continue;
+            }
+
+            comments.push({
+                path:
+                    finding.filePath,
+
+                line:
+                    finding.line,
+
+                side:
+                    "RIGHT",
+
+                body:
+                    this.buildInlineCommentBody(
+                        finding
+                    ),
+            });
+        }
+
+        return {
+            comments,
+            nonInlineFindings,
+        };
+    };
+
+
+    private buildInlineCommentBody = (
+        finding: ReviewFinding
+    ): string => {
+        const sections = [
+            `**${finding.severity.toUpperCase()} — ${finding.title}**`,
+            "",
+            finding.explanation,
+        ];
+
+        if (finding.suggestion) {
+            sections.push(
+                "",
+                `**Suggestion:** ${finding.suggestion}`
+            );
+        }
+
+        return sections.join(
+            "\n"
+        );
+    };
+
+
+    // -------------------------------------
+    // Unified diff parsing
+    // -------------------------------------
+
+    private getReviewableRightSideLines = (
+        patch: string
+    ): Set<number> => {
+        const reviewableLines =
+            new Set<number>();
+
+        let newLine:
+            number | null = null;
+
+        for (
+            const patchLine
+            of patch.split("\n")
+        ) {
+            const hunkMatch =
+                patchLine.match(
+                    /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+                );
+
+            if (hunkMatch) {
+                const startLine =
+                    hunkMatch[1];
+
+                if (!startLine) {
+                    continue;
+                }
+
+                newLine =
+                    Number(
+                        startLine
+                    );
+
+                continue;
+            }
+
+            if (newLine === null) {
+                continue;
+            }
+
+            if (
+                patchLine.startsWith(
+                    "+"
+                ) &&
+                !patchLine.startsWith(
+                    "+++"
+                )
+            ) {
+                reviewableLines.add(
+                    newLine
+                );
+
+                newLine++;
+
+                continue;
+            }
+
+            if (
+                patchLine.startsWith(
+                    "-"
+                ) &&
+                !patchLine.startsWith(
+                    "---"
+                )
+            ) {
+                continue;
+            }
+
+            if (
+                patchLine.startsWith(
+                    " "
+                )
+            ) {
+                reviewableLines.add(
+                    newLine
+                );
+
+                newLine++;
+
+                continue;
+            }
+
+            if (
+                patchLine.startsWith(
+                    "\\"
+                )
+            ) {
+                continue;
+            }
+        }
+
+        return reviewableLines;
+    };
+
+
+    // -------------------------------------
+    // Review summary
+    // -------------------------------------
+
+    private buildReviewBody = (
+        reviewResult: ReviewResult,
+        nonInlineFindings:
+            ReviewResult["findings"]
+    ): string => {
+        const sections:
+            string[] = [];
+
+        sections.push(
+            [
+                "## AI Code Review",
+                "",
+                `**Recommendation:** ${reviewResult.recommendation}`,
+                "",
+                reviewResult.summary,
+                "",
+                `**Findings:** ${reviewResult.findings.length}`,
+            ].join("\n")
+        );
+
+        if (
+            nonInlineFindings.length > 0
+        ) {
+            const findings =
+                nonInlineFindings.map(
+                    (
+                        finding,
+                        index
+                    ) => {
+                        return [
+                            `### ${index + 1}. ${finding.title}`,
+                            "",
+                            `**Severity:** ${finding.severity}`,
+                            `**File:** \`${finding.filePath}\``,
+                            `**Line:** ${finding.line ?? "n/a"}`,
+                            "",
+                            finding.explanation,
+                            "",
+                            finding.suggestion
+                                ? `**Suggestion:** ${finding.suggestion}`
+                                : "",
+                        ]
+                            .filter(
+                                Boolean
+                            )
+                            .join(
+                                "\n"
+                            );
+                    }
+                );
+
+            sections.push(
+                [
+                    "## Findings without inline location",
+                    "",
+                    findings.join(
+                        "\n\n"
+                    ),
+                ].join("\n")
+            );
+        }
+
+        return sections.join(
+            "\n\n---\n\n"
+        );
+    };
+
+
+    // -------------------------------------
+    // GitHub REST helpers
+    // -------------------------------------
 
     private parseRepository = (
         repository: string
@@ -115,6 +437,7 @@ export class GitHubRestReviewPublisher
         };
     };
 
+
     private createHeaders = (): HeadersInit => {
         return {
             Accept:
@@ -132,60 +455,5 @@ export class GitHubRestReviewPublisher
             "User-Agent":
                 "github-pr-ai-reviewer",
         };
-    };
-
-    private buildReviewBody = (
-        reviewResult: ReviewResult
-    ): string => {
-        const sections:
-            string[] = [];
-
-        sections.push(
-            [
-                "## AI Code Review",
-                "",
-                `**Recommendation:** ${reviewResult.recommendation}`,
-                "",
-                reviewResult.summary,
-            ].join("\n")
-        );
-
-        if (
-            reviewResult.findings.length > 0
-        ) {
-            const findings =
-                reviewResult.findings.map(
-                    (
-                        finding,
-                        index
-                    ) => {
-                        return [
-                            `### ${index + 1}. ${finding.title}`,
-                            "",
-                            `**Severity:** ${finding.severity}`,
-                            `**File:** \`${finding.filePath}\``,
-                            `**Line:** ${finding.line ?? "n/a"}`,
-                            "",
-                            finding.explanation,
-                            "",
-                            finding.suggestion
-                                ? `**Suggestion:** ${finding.suggestion}`
-                                : "",
-                        ]
-                            .filter(Boolean)
-                            .join("\n");
-                    }
-                );
-
-            sections.push(
-                findings.join(
-                    "\n\n"
-                )
-            );
-        }
-
-        return sections.join(
-            "\n\n---\n\n"
-        );
     };
 }
