@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: http://127.0.0.1:3000/reviews/status-test-001
+  url: http://127.0.0.1:3000/reviews/local-test-014
   auth: inherit
 
 settings:

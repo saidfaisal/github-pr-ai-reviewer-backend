@@ -37,8 +37,8 @@ import {
 } from "./adapters/outbound/inMemoryReviewQueue.ts";
 
 import {
-    FakeReviewAnalyzer,
-} from "./adapters/outbound/fakeReviewAnalyzer.ts";
+    AntigravityReviewAnalyzer,
+} from "./adapters/outbound/antigravity/antigravityReviewAnalyzer.ts";
 
 import {
     GitHubRestReviewPublisher,
@@ -70,7 +70,7 @@ const pullRequestReader =
             GITHUB_TOKEN,
     });
 
-const reviewAnalyzer = new FakeReviewAnalyzer();
+const reviewAnalyzer = new AntigravityReviewAnalyzer();
 
 const reviewPublisher =
     new GitHubRestReviewPublisher({
