@@ -27,7 +27,17 @@ export const GITHUB_WEBHOOK_SECRET =
         "GITHUB_WEBHOOK_SECRET"
     );
 
-export const GITHUB_TOKEN =
+export const GITHUB_APP_ID =
     getRequiredEnv(
-        "GITHUB_TOKEN"
+        "GITHUB_APP_ID"
+    );
+
+export const GITHUB_APP_INSTALLATION_ID =
+    getRequiredEnv(
+        "GITHUB_APP_INSTALLATION_ID"
+    );
+
+export const GITHUB_APP_PRIVATE_KEY_PATH =
+    getRequiredEnv(
+        "GITHUB_APP_PRIVATE_KEY_PATH"
     );

@@ -45,7 +45,13 @@ import {
 } from "./adapters/outbound/githubRestReviewPublisher.ts";
 
 import {
-    GITHUB_TOKEN,
+    GitHubAppTokenProvider,
+} from "./adapters/outbound/githubAppTokenProvider.ts";
+
+import {
+    GITHUB_APP_ID,
+    GITHUB_APP_INSTALLATION_ID,
+    GITHUB_APP_PRIVATE_KEY_PATH,
     GITHUB_WEBHOOK_SECRET,
     HOST,
     MAX_BODY_BYTES,
@@ -64,18 +70,30 @@ import {
 const reviewJobStore =
     new InMemoryReviewJobStore();
 
+const githubTokenProvider =
+    new GitHubAppTokenProvider({
+        appId:
+            GITHUB_APP_ID,
+
+        installationId:
+            GITHUB_APP_INSTALLATION_ID,
+
+        privateKeyPath:
+            GITHUB_APP_PRIVATE_KEY_PATH,
+    });
+
 const pullRequestReader =
     new GitHubRestPullRequestReader({
-        token:
-            GITHUB_TOKEN,
+        tokenProvider:
+            githubTokenProvider,
     });
 
 const reviewAnalyzer = new AntigravityReviewAnalyzer();
 
 const reviewPublisher =
     new GitHubRestReviewPublisher({
-        token:
-            GITHUB_TOKEN,
+        tokenProvider:
+            githubTokenProvider,
     });
 
 const reviewProcessor =

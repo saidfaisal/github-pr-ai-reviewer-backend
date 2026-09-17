@@ -8,9 +8,13 @@ import type {
     ReviewResult,
 } from "../../domain/review.ts";
 
+import type {
+    GitHubAppTokenProvider
+} from "../outbound/githubAppTokenProvider.ts";
+
 
 type GitHubRestReviewPublisherDependencies = {
-    token: string;
+    tokenProvider: GitHubAppTokenProvider;
 };
 
 type GitHubReviewComment = {
@@ -24,14 +28,14 @@ type GitHubReviewComment = {
 export class GitHubRestReviewPublisher
     implements ReviewPublisher {
 
-    private readonly token: string;
+    private readonly tokenProvider: GitHubAppTokenProvider;
 
     constructor(
         dependencies:
             GitHubRestReviewPublisherDependencies
     ) {
-        this.token =
-            dependencies.token;
+        this.tokenProvider =
+            dependencies.tokenProvider;
     }
 
     async publish(
@@ -88,7 +92,7 @@ export class GitHubRestReviewPublisher
                         "POST",
 
                     headers:
-                        this.createHeaders(),
+                        await this.createHeaders(),
 
                     body:
                         JSON.stringify(
@@ -438,13 +442,16 @@ export class GitHubRestReviewPublisher
     };
 
 
-    private createHeaders = (): HeadersInit => {
+    private createHeaders = async (): Promise<HeadersInit> => {
+        const token = await this.tokenProvider
+            .getToken();
+
         return {
             Accept:
                 "application/vnd.github+json",
 
             Authorization:
-                `Bearer ${this.token}`,
+                `Bearer ${token}`,
 
             "Content-Type":
                 "application/json",

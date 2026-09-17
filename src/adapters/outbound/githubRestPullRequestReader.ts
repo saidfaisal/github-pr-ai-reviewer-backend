@@ -3,13 +3,17 @@ import type {
 } from "../../application/ports/pullRequestReader.ts";
 
 import type {
+    GitHubAppTokenProvider
+} from "../outbound/githubAppTokenProvider.ts";
+
+import type {
     PullRequestContext,
     PullRequestFile,
     ReviewTrigger,
 } from "../../domain/review.ts";
 
 type GitHubRestPullRequestReaderDependencies = {
-    token: string;
+    tokenProvider: GitHubAppTokenProvider;
 };
 
 type GitHubPullRequestResponse = {
@@ -52,14 +56,14 @@ const isRecord = (
 export class GitHubRestPullRequestReader
     implements PullRequestReader {
 
-    private readonly token: string;
+    private readonly tokenProvider: GitHubAppTokenProvider;
 
     constructor(
         dependencies:
             GitHubRestPullRequestReaderDependencies
     ) {
-        this.token =
-            dependencies.token;
+        this.tokenProvider =
+            dependencies.tokenProvider;
     }
 
     async getPullRequest(
@@ -135,13 +139,16 @@ export class GitHubRestPullRequestReader
         };
     }
 
-    private createHeaders = (): HeadersInit => {
+    private createHeaders = async (): Promise<HeadersInit> => {
+        const token = await this.tokenProvider
+            .getToken();
+
         return {
             Accept:
                 "application/vnd.github+json",
 
             Authorization:
-                `Bearer ${this.token}`,
+                `Bearer ${token}`,
 
             "X-GitHub-Api-Version":
                 "2026-03-10",
@@ -162,7 +169,7 @@ export class GitHubRestPullRequestReader
                         "GET",
 
                     headers:
-                        this.createHeaders(),
+                        await this.createHeaders(),
                 }
             );
 
@@ -199,7 +206,7 @@ export class GitHubRestPullRequestReader
                         "GET",
 
                     headers:
-                        this.createHeaders(),
+                        await this.createHeaders(),
                 }
             );
 
